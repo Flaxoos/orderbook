@@ -43,12 +43,17 @@ cargo build --release
 ### Run Tests
 
 ```bash
+# Build binaries first (required for CLI tests)
+cargo build
+
 # Run all tests
 cargo test --workspace
 
 # Run with output
 cargo test --workspace -- --nocapture
 ```
+
+**Note**: CLI tests use `assert_cmd` to test the actual binary, so `cargo build` must be run first. If you see an error like "CLI binary not found", simply run `cargo build --bin order-book-cli` first.
 
 ## Demo
 
@@ -269,15 +274,18 @@ The project includes comprehensive test coverage:
 Run specific test suites:
 
 ```bash
-# Core library tests only
+# Core library tests only (no binary required)
 cargo test -p order-book-core
 
-# CLI tests only  
+# CLI tests only (requires binary to be built first)
+cargo build --bin order-book-cli
 cargo test -p order-book-cli
 
 # Run a specific test
 cargo test test_price_time_priority
 ```
+
+**CLI Testing Note**: The CLI tests use `assert_cmd` to test the actual compiled binary, ensuring that the CLI behaves correctly as users would experience it. This requires the binary to exist before running tests. If tests fail with "CLI binary not found", the error message will guide you to run `cargo build --bin order-book-cli` first.
 
 ## License
 

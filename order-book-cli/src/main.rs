@@ -458,9 +458,15 @@ fn print_book_summary(book: &OrderBook) {
 mod tests {
     use assert_cmd::Command;
     use predicates::prelude::*;
+    
+    fn get_cli_command() -> Command {
+        Command::cargo_bin("order-book-cli").unwrap_or_else(|e| {
+            panic!("CLI binary not found. Please run 'cargo build --bin order-book-cli' first.\nOriginal error: {}", e);
+        })
+    }
     #[test]
     fn test_place_buy_order_no_match() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "buy", "100", "10", "1"])
             .assert()
             .success()
@@ -469,7 +475,7 @@ mod tests {
 
     #[test]
     fn test_place_sell_order_no_match() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "sell", "100", "10", "1"])
             .assert()
             .success()
@@ -478,7 +484,7 @@ mod tests {
 
     #[test]
     fn test_best_buy_empty_book() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.arg("best-buy")
             .assert()
             .success()
@@ -487,7 +493,7 @@ mod tests {
 
     #[test]
     fn test_best_sell_empty_book() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.arg("best-sell")
             .assert()
             .success()
@@ -497,13 +503,13 @@ mod tests {
     #[test]
     fn test_case_sensitive_side() {
         // Test that uppercase side values are rejected
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "BUY", "100", "10", "1"])
             .assert()
             .failure()
             .stderr(predicate::str::contains("invalid value"));
 
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "SELL", "100", "10", "2"])
             .assert()
             .failure()
@@ -512,7 +518,7 @@ mod tests {
 
     #[test]
     fn test_invalid_side() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "invalid", "100", "10", "1"])
             .assert()
             .failure()
@@ -521,7 +527,7 @@ mod tests {
 
     #[test]
     fn test_invalid_price() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "buy", "not_a_number", "10", "1"])
             .assert()
             .failure()
@@ -530,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_invalid_quantity() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "buy", "100", "not_a_number", "1"])
             .assert()
             .failure()
@@ -539,7 +545,7 @@ mod tests {
 
     #[test]
     fn test_invalid_id() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "buy", "100", "10", "not_a_number"])
             .assert()
             .failure()
@@ -548,7 +554,7 @@ mod tests {
 
     #[test]
     fn test_missing_arguments() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "buy"])
             .assert()
             .failure()
@@ -557,7 +563,7 @@ mod tests {
 
     #[test]
     fn test_help_command() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.arg("--help")
             .assert()
             .success()
@@ -570,7 +576,7 @@ mod tests {
 
     #[test]
     fn test_version_flag() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.arg("--version")
             .assert()
             .failure()
@@ -579,7 +585,7 @@ mod tests {
 
     #[test]
     fn test_no_subcommand_starts_interactive() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.write_stdin("quit\n")
             .assert()
             .success()
@@ -588,7 +594,7 @@ mod tests {
 
     #[test]
     fn test_unknown_subcommand() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.arg("unknown")
             .assert()
             .failure()
@@ -597,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_place_order_help() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "--help"])
             .assert()
             .success()
@@ -610,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_negative_price() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "buy", "-100", "10", "1"])
             .assert()
             .failure()
@@ -619,7 +625,7 @@ mod tests {
 
     #[test]
     fn test_negative_quantity() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "buy", "100", "-10", "1"])
             .assert()
             .failure()
@@ -628,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_large_numbers() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "buy", "1000000000", "1000000000", "1000000000"])
             .assert()
             .success()
@@ -637,7 +643,7 @@ mod tests {
 
     #[test]
     fn test_zero_quantity() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "buy", "100", "0", "1"])
             .assert()
             .failure()
@@ -646,7 +652,7 @@ mod tests {
 
     #[test]
     fn test_zero_price() {
-        let mut cmd = Command::cargo_bin("order-book-cli").unwrap();
+        let mut cmd = get_cli_command();
         cmd.args(&["place-order", "buy", "0", "10", "1"])
             .assert()
             .success()
