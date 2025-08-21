@@ -1,5 +1,21 @@
-use crate::types::{Id, Instrument, Order, OrderBookError, Price, PriceAndQuantity, PriceLevel, Quantity, Side, Timestamp, Trade, Trades};
+use crate::types::{
+    Id, Instrument, Order, OrderBookError, Price, PriceAndQuantity, PriceLevel, Quantity, Side,
+    Timestamp, Trade, Trades,
+};
 use std::collections::{BTreeMap, HashSet};
+
+/// Result of matching against a price level, indicating what cache updates are needed.
+#[derive(Debug, PartialEq)]
+enum LevelMatchResult {
+    /// Level still has orders, was not the best level
+    Matched,
+    /// Level still has orders, was the best level (cache update needed)
+    MatchedBestLevel,
+    /// Level is now empty and should be removed
+    EmptyLevel,
+    /// Level is now empty, was the best level (remove + cache update needed)
+    EmptyBestLevel,
+}
 
 /// A limit order book that maintains buy and sell orders.
 ///
@@ -17,6 +33,10 @@ pub struct OrderBook {
     next_timestamp: Timestamp,
     /// Set of order IDs currently resting in the book
     id_index: HashSet<Id>,
+    /// Cached best buy price and quantity
+    best_buy: Option<PriceAndQuantity>,
+    /// Cached best sell price and quantity
+    best_sell: Option<PriceAndQuantity>,
 }
 
 impl OrderBook {
@@ -29,6 +49,8 @@ impl OrderBook {
             sell_side: BTreeMap::new(),
             next_timestamp: 0,
             id_index: HashSet::new(),
+            best_buy: None,
+            best_sell: None,
         }
     }
 
@@ -82,10 +104,7 @@ impl OrderBook {
     ///
     /// `Some(PriceAndQuantity)` if buy orders exist, `None` otherwise
     pub fn best_buy(&self) -> Option<PriceAndQuantity> {
-        self.buy_side
-            .iter()
-            .next_back()
-            .map(|(price, level)| (*price, level.total_quantity))
+        self.best_buy
     }
 
     /// Returns the best (lowest) sell price and total quantity at that level.
@@ -94,10 +113,7 @@ impl OrderBook {
     ///
     /// `Some(PriceAndQuantity)` if sell orders exist, `None` otherwise
     pub fn best_sell(&self) -> Option<PriceAndQuantity> {
-        self.sell_side
-            .iter()
-            .next()
-            .map(|(price, level)| (*price, level.total_quantity))
+        self.best_sell
     }
 
     /// Returns market depth information for the specified side.
@@ -136,6 +152,30 @@ impl OrderBook {
         self.buy_side.is_empty() && self.sell_side.is_empty()
     }
 
+    /// Updates the cached best buy price and quantity.
+    ///
+    /// Recalculates the best buy from the buy_side BTreeMap and caches the result.
+    /// This should be called whenever the buy side of the book is modified.
+    fn set_best_buy(&mut self) {
+        self.best_buy = self
+            .buy_side
+            .iter()
+            .next_back()
+            .map(|(price, level)| (*price, level.total_quantity));
+    }
+
+    /// Updates the cached best sell price and quantity.
+    ///
+    /// Recalculates the best sell from the sell_side BTreeMap and caches the result.
+    /// This should be called whenever the sell side of the book is modified.
+    fn update_cached_best_sell(&mut self) {
+        self.best_sell = self
+            .sell_side
+            .iter()
+            .next()
+            .map(|(price, level)| (*price, level.total_quantity));
+    }
+
     /// Attempts to match an incoming order against existing orders.
     ///
     /// For buy orders, matches against sell orders at or below the buy price.
@@ -146,58 +186,110 @@ impl OrderBook {
 
         match incoming.side {
             Side::Buy => {
-                let prices_to_match: Vec<Price> = self
-                    .sell_side
-                    .range(..=incoming.price)
-                    .map(|(price, _)| *price)
-                    .collect();
-
-                for price in prices_to_match {
-                    if incoming.quantity == 0 {
-                        break;
-                    }
-
-                    // compute whether this level becomes empty *inside* a block
-                    let remove_level = if let Some(level) = self.sell_side.get_mut(&price) {
-                        Self::match_against_level(incoming, level, &mut trades, &mut self.id_index);
-                        level.is_empty()
-                    } else {
-                        false
+                while incoming.quantity > 0 {
+                    // Get the best matching price level
+                    let best_price = match self.sell_side.range(..=incoming.price).next() {
+                        Some((price, _)) => *price,
+                        None => break, // No more matching levels
                     };
+                    
+                    // Process this single price level completely
+                    let match_result = Self::match_price_level(
+                        incoming,
+                        &mut trades,
+                        best_price,
+                        &mut self.sell_side,
+                        &mut self.id_index,
+                    );
 
-                    if remove_level {
-                        self.sell_side.remove(&price);
+                    match match_result {
+                        LevelMatchResult::EmptyBestLevel => {
+                            self.sell_side.remove(&best_price);
+                            self.update_cached_best_sell();
+                        }
+                        LevelMatchResult::EmptyLevel => {
+                            self.sell_side.remove(&best_price);
+                        }
+                        LevelMatchResult::MatchedBestLevel => {
+                            self.update_cached_best_sell();
+                        }
+                        LevelMatchResult::Matched => {
+                            // No cache update needed
+                        }
                     }
                 }
             }
             Side::Sell => {
-                let prices_to_match: Vec<Price> = self
-                    .buy_side
-                    .range(incoming.price..)
-                    .rev()
-                    .map(|(price, _)| *price)
-                    .collect();
-
-                for price in prices_to_match {
-                    if incoming.quantity == 0 {
-                        break;
-                    }
-
-                    let remove_level = if let Some(level) = self.buy_side.get_mut(&price) {
-                        Self::match_against_level(incoming, level, &mut trades, &mut self.id_index);
-                        level.is_empty()
-                    } else {
-                        false
+                while incoming.quantity > 0 {
+                    // Get the best matching price level
+                    let best_price = match self.buy_side.range(incoming.price..).next_back() {
+                        Some((price, _)) => *price,
+                        None => break, // No more matching levels
                     };
+                    
+                    // Process this single price level completely
+                    let match_result = Self::match_price_level(
+                        incoming,
+                        &mut trades,
+                        best_price,
+                        &mut self.buy_side,
+                        &mut self.id_index,
+                    );
 
-                    if remove_level {
-                        self.buy_side.remove(&price);
+                    match match_result {
+                        LevelMatchResult::EmptyBestLevel => {
+                            self.buy_side.remove(&best_price);
+                            self.set_best_buy();
+                        }
+                        LevelMatchResult::EmptyLevel => {
+                            self.buy_side.remove(&best_price);
+                        }
+                        LevelMatchResult::MatchedBestLevel => {
+                            self.set_best_buy();
+                        }
+                        // No cache update needed
+                        LevelMatchResult::Matched => {}
                     }
                 }
             }
         }
 
         trades
+    }
+
+    /// Helper method to match against a single price level on a specific book side.
+    ///
+    /// This eliminates the duplication between Buy and Sell matching logic by
+    /// parameterizing the side-specific behaviors.
+    ///
+    /// Returns matching result to guide cache updates.
+    fn match_price_level(
+        incoming: &mut Order,
+        trades: &mut Vec<Trade>,
+        price: Price,
+        book_side: &mut BTreeMap<Price, PriceLevel>,
+        id_index: &mut HashSet<Id>,
+    ) -> LevelMatchResult {
+        // Check if this price level is the best before modifying it
+        let level_was_best = match incoming.side {
+            Side::Buy => book_side.iter().next().map(|(p, _)| *p) == Some(price),
+            Side::Sell => book_side.iter().next_back().map(|(p, _)| *p) == Some(price),
+        };
+
+        // compute whether this level becomes empty *inside* a block
+        let level_is_empty = if let Some(level) = book_side.get_mut(&price) {
+            Self::match_against_level(incoming, level, trades, id_index);
+            level.is_empty()
+        } else {
+            false
+        };
+
+        match (level_is_empty, level_was_best) {
+            (true, true) => LevelMatchResult::EmptyBestLevel,
+            (true, false) => LevelMatchResult::EmptyLevel,
+            (false, true) => LevelMatchResult::MatchedBestLevel,
+            (false, false) => LevelMatchResult::Matched,
+        }
     }
 
     /// Matches an incoming order against a specific price level.
@@ -241,7 +333,13 @@ impl OrderBook {
         book_side
             .entry(order.price)
             .or_insert_with(|| PriceLevel::new(order.price))
-            .add_order(order);
+            .add_order(order.clone());
+
+        // Update cache when adding orders that might affect best prices
+        match order.side {
+            Side::Buy => self.set_best_buy(),
+            Side::Sell => self.update_cached_best_sell(),
+        }
     }
 }
 #[cfg(test)]
@@ -263,7 +361,10 @@ mod order_book_tests {
     fn test_zero_quantity_error() {
         let mut order_book = new_book();
         let result = order_book.place_order(Side::Buy, price("100.00"), 0, 1);
-        assert!(matches!(result, Err(OrderBookError::ZeroQuantity { id: 1, quantity: 0 })));
+        assert!(matches!(
+            result,
+            Err(OrderBookError::ZeroQuantity { id: 1, quantity: 0 })
+        ));
     }
     // --- core matching tests ---
 
@@ -274,10 +375,14 @@ mod order_book_tests {
         // Maker: SELL 0.010000 @ 100.00
         let a_price = price("100.00");
         let a_quantity = quantity("0.010000");
-        order_book.place_order(Side::Sell, a_price, a_quantity, 1).unwrap();
+        order_book
+            .place_order(Side::Sell, a_price, a_quantity, 1)
+            .unwrap();
 
         // Taker: BUY same quantity at 100.00 (crosses)
-        let trades = order_book.place_order(Side::Buy, a_price, a_quantity, 2).unwrap();
+        let trades = order_book
+            .place_order(Side::Buy, a_price, a_quantity, 2)
+            .unwrap();
         assert_eq!(trades.len(), 1);
         let t = &trades[0];
         assert_eq!(t.price, a_price);
@@ -295,10 +400,14 @@ mod order_book_tests {
         let mut order_book = new_book();
 
         // Maker: SELL 0.005000 @ 100.00
-        order_book.place_order(Side::Sell, price("100.00"), quantity("0.005000"), 1).unwrap();
+        order_book
+            .place_order(Side::Sell, price("100.00"), quantity("0.005000"), 1)
+            .unwrap();
 
         // Taker: BUY 0.008000 @ 100.00 -> fills 0.005000, leaves 0.003000 as bid
-        let trades = order_book.place_order(Side::Buy, price("100.00"), quantity("0.008000"), 2).unwrap();
+        let trades = order_book
+            .place_order(Side::Buy, price("100.00"), quantity("0.008000"), 2)
+            .unwrap();
         assert_eq!(trades.len(), 1);
         assert_eq!(trades[0].quantity, quantity("0.005000"));
 
@@ -317,13 +426,21 @@ mod order_book_tests {
 
         // Resting asks:
         // Better price first: 99.99 (id=10 quantity=0.002)
-        order_book.place_order(Side::Sell, price("99.99"), quantity("0.002"), 10).unwrap();
+        order_book
+            .place_order(Side::Sell, price("99.99"), quantity("0.002"), 10)
+            .unwrap();
         // Worse price: 100.00 (two FIFO orders id=11 then id=12)
-        order_book.place_order(Side::Sell, price("100.00"), quantity("0.003"), 11).unwrap();
-        order_book.place_order(Side::Sell, price("100.00"), quantity("0.004"), 12).unwrap();
+        order_book
+            .place_order(Side::Sell, price("100.00"), quantity("0.003"), 11)
+            .unwrap();
+        order_book
+            .place_order(Side::Sell, price("100.00"), quantity("0.004"), 12)
+            .unwrap();
 
         // Incoming BUY crosses for total 0.007:
-        let trades = order_book.place_order(Side::Buy, price("150.00"), quantity("0.007"), 99).unwrap();
+        let trades = order_book
+            .place_order(Side::Buy, price("150.00"), quantity("0.007"), 99)
+            .unwrap();
         assert_eq!(trades.len(), 3);
 
         // 1) hit 99.99 (id=10) for 0.002
@@ -355,11 +472,17 @@ mod order_book_tests {
         let mut order_book = new_book();
 
         // Two bids at different prices
-        order_book.place_order(Side::Buy, price("99.50"), quantity("0.010"), 1).unwrap();
-        order_book.place_order(Side::Buy, price("99.75"), quantity("0.020"), 2).unwrap();
+        order_book
+            .place_order(Side::Buy, price("99.50"), quantity("0.010"), 1)
+            .unwrap();
+        order_book
+            .place_order(Side::Buy, price("99.75"), quantity("0.020"), 2)
+            .unwrap();
 
         // One ask
-        order_book.place_order(Side::Sell, price("100.10"), quantity("0.015"), 3).unwrap();
+        order_book
+            .place_order(Side::Sell, price("100.10"), quantity("0.015"), 3)
+            .unwrap();
 
         // Best BUY is highest price (99.75)
         let (bb_p, bb_q) = order_book.best_buy().unwrap();
@@ -370,6 +493,60 @@ mod order_book_tests {
         let (ba_p, ba_q) = order_book.best_sell().unwrap();
         assert_eq!(ba_p, price("100.10"));
         assert_eq!(ba_q, quantity("0.015"));
+    }
+
+    #[test]
+    fn test_cached_best_prices_update_during_matching() {
+        let mut order_book = new_book();
+
+        // Setup: Create multiple price levels on both sides
+        // Sell side: 99.00 (qty=1), 99.50 (qty=2), 100.00 (qty=3)
+        order_book.place_order(Side::Sell, price("99.00"), quantity("0.001"), 1).unwrap();
+        order_book.place_order(Side::Sell, price("99.50"), quantity("0.002"), 2).unwrap();
+        order_book.place_order(Side::Sell, price("100.00"), quantity("0.003"), 3).unwrap();
+        
+        // Buy side: 98.00 (qty=1), 98.50 (qty=2)
+        order_book.place_order(Side::Buy, price("98.00"), quantity("0.001"), 4).unwrap();
+        order_book.place_order(Side::Buy, price("98.50"), quantity("0.002"), 5).unwrap();
+
+        // Verify initial cached best prices
+        assert_eq!(order_book.best_sell().unwrap(), (price("99.00"), quantity("0.001")));
+        assert_eq!(order_book.best_buy().unwrap(), (price("98.50"), quantity("0.002")));
+
+        // Test 1: Incoming buy that removes best sell level and updates cache
+        let trades = order_book.place_order(Side::Buy, price("99.25"), quantity("0.001"), 6).unwrap();
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].price, price("99.00")); // Matched at 99.00
+        
+        // Cache should be updated - best sell is now 99.50
+        assert_eq!(order_book.best_sell().unwrap(), (price("99.50"), quantity("0.002")));
+        assert_eq!(order_book.best_buy().unwrap(), (price("98.50"), quantity("0.002"))); // Unchanged
+
+        // Test 2: Incoming buy that partially fills best sell level (cache updates quantity)
+        let trades = order_book.place_order(Side::Buy, price("99.50"), quantity("0.001"), 7).unwrap();
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].quantity, quantity("0.001"));
+        
+        // Cache should be updated - best sell quantity reduced
+        assert_eq!(order_book.best_sell().unwrap(), (price("99.50"), quantity("0.001")));
+
+        // Test 3: Incoming sell that removes best buy level and updates cache
+        let trades = order_book.place_order(Side::Sell, price("98.25"), quantity("0.002"), 8).unwrap();
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].price, price("98.50")); // Matched at 98.50
+        
+        // Cache should be updated - best buy is now 98.00
+        assert_eq!(order_book.best_buy().unwrap(), (price("98.00"), quantity("0.001")));
+
+        // Test 4: Large order that sweeps multiple levels and updates cache correctly
+        let trades = order_book.place_order(Side::Buy, price("101.00"), quantity("0.010"), 9).unwrap();
+        assert_eq!(trades.len(), 2); // Should match 99.50 (0.001) and 100.00 (0.003)
+        
+        // After sweeping, sell side should be empty
+        assert!(order_book.best_sell().is_none());
+        
+        // Remainder should be added as new best buy
+        assert_eq!(order_book.best_buy().unwrap(), (price("101.00"), quantity("0.006"))); // 10 - 1 - 3 = 6
     }
 
     // --- sanity: PriceLevel FIFO using actual Order ---
