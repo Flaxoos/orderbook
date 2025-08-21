@@ -1,0 +1,13 @@
+[package]
+name = "order-book-core"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+cli = ["clap"]
+
+[dependencies]
+rust_decimal = { workspace = true }
+validator = { version = "0.19", features = ["derive"] }
+clap = { workspace = true, optional = true }
+derive_more = { workspace = true }
