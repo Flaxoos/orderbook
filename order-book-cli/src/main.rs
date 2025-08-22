@@ -1,4 +1,4 @@
-//! # Valhalla Order Book CLI
+//! # Order Book CLI
 //!
 //! A command-line interface for interacting with the order book.
 //!
@@ -197,7 +197,7 @@ fn parse_interactive_command(input: &str) -> Result<Commands, String> {
 
 /// Runs the interactive REPL mode
 fn run_interactive_mode(instrument: Instrument) {
-    println!("=== Valhalla Order Book Interactive CLI ===");
+    println!("=== Order Book Interactive CLI ===");
     println!("Type 'help' for available commands, 'quit' to exit\n");
 
     let mut book = OrderBook::new(instrument);
@@ -589,7 +589,7 @@ mod tests {
         cmd.write_stdin("quit\n")
             .assert()
             .success()
-            .stdout(predicate::str::contains("=== Valhalla Order Book Interactive CLI ==="));
+            .stdout(predicate::str::contains("=== Order Book Interactive CLI ==="));
     }
 
     #[test]

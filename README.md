@@ -142,7 +142,7 @@ Interactive mode starts automatically and provides persistent order book state t
 ```bash
 # Interactive mode with default BTC/USDT
 $ cargo run --bin order-book-cli
-=== Valhalla Order Book Interactive CLI ===
+=== Order Book Interactive CLI ===
 Type 'help' for available commands, 'quit' to exit
 
 Instrument: BTC/USDT
@@ -159,7 +159,7 @@ Goodbye!
 
 # Interactive mode with custom ETH/USD pair
 $ cargo run --bin order-book-cli -- --base-asset ETH --quote-asset USD
-=== Valhalla Order Book Interactive CLI ===
+=== Order Book Interactive CLI ===
 Type 'help' for available commands, 'quit' to exit
 
 Instrument: ETH/USD
