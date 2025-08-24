@@ -286,7 +286,3 @@ cargo test test_price_time_priority
 ```
 
 **CLI Testing Note**: The CLI tests use `assert_cmd` to test the actual compiled binary, ensuring that the CLI behaves correctly as users would experience it. This requires the binary to exist before running tests. If tests fail with "CLI binary not found", the error message will guide you to run `cargo build --bin order-book-cli` first.
-
-## License
-
-This project is provided as-is for technical interview purposes.
